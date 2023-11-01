@@ -1,0 +1,222 @@
+esphome:
+  name: kotlownia
+
+esp32:
+  board: esp32dev
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret kotlownia_api_key
+
+ota:
+  password: !secret kotlownia_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.21
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+    dns1: 8.8.8.8
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Kotlownia Fallback Hotspot"
+    password: "NHddGXbqoO1c"
+
+climate:
+  - platform: pid
+    name: "Sterowanie dmuchawą"
+    id: "dmuchawa_pid"
+    control_parameters:
+      kp: 0.75
+      ki: 0.5
+      kd: 2.0
+      max_integral: 1.0
+      min_integral: 1.0
+    default_target_temperature: 40
+    sensor: piec_temperatura
+    heat_output: dmuchawa_intermediate
+    deadband_parameters:
+      threshold_high: 0.5
+      threshold_low: -0.5
+    on_state:
+      then:
+        - if:
+            condition:
+              - lambda: !lambda return id(dmuchawa_pid).mode != CLIMATE_MODE_OFF;
+            then:
+              - output.turn_on: dmuchawa_indicator
+            else:
+              - output.turn_off: dmuchawa_indicator
+        - if:
+            condition:
+              - lambda: !lambda return id(dmuchawa_pid).mode != id(climate_previous_state);
+            then:
+              - globals.set:
+                  id: climate_previous_state
+                  value: !lambda return id(dmuchawa_pid).mode;
+              - lambda: !lambda id(piec_temperatura).publish_state(id(piec_temperatura).state);
+    visual:
+      max_temperature: 80
+      min_temperature: 30
+      temperature_step: 1
+
+  # gaz
+  - platform: thermostat
+    name: "Piec gazowy"
+    sensor: pokojowy
+    idle_action:
+      then:
+        - output.turn_off: piec_gazowy
+    heat_action:
+      then:
+        - output.turn_on: piec_gazowy
+    min_idle_time:
+      seconds: 30
+    min_heating_off_time:
+      seconds: 30
+    min_heating_run_time:
+      seconds: 30
+    heat_deadband: 0.5
+    heat_overrun: 0.5
+    preset:
+      - name: "away"
+        default_target_temperature_low: 16
+      - name: "comfort"
+        default_target_temperature_low: 20
+      - name: "sleep"
+        default_target_temperature_low: 17
+
+script:
+  - id: dmuchawa_timeout
+    mode: single
+    then:
+      - delay:
+          minutes: 15
+      - climate.control:
+          id: dmuchawa_pid
+          mode: "OFF"
+
+globals:
+  - id: dmuchawa_pid_output # value wanted by pid controller
+    type: float
+    initial_value: "0.0"
+    restore_value: False
+  - id: climate_previous_state
+    type: ClimateMode
+    initial_value: CLIMATE_MODE_OFF
+    restore_value: False
+
+output:
+  - platform: template
+    type: float
+    id: dmuchawa_intermediate
+    write_action:
+      then:
+        - globals.set:
+            id: dmuchawa_pid_output
+            value: !lambda return state;
+        - lambda: |-
+            if((state) > (id(dmuchawa_max_speed).state / 100.0)) {
+              id(dmuchawa_current_output).publish_state(id(dmuchawa_max_speed).state);
+            }
+            else {
+               id(dmuchawa_current_output).publish_state(state * 100.0);
+            }
+
+        - if:
+            condition:
+              - lambda: !lambda return id(dmuchawa_current_output).state != 0.0;
+            then:
+              - output.turn_on: dmuchawa_switch
+              - script.execute: dmuchawa_timeout
+            else:
+              - output.turn_off: dmuchawa_switch
+              - script.stop: dmuchawa_timeout
+
+        - output.set_level:
+            id: dmuchawa
+            level: !lambda return id(dmuchawa_current_output).state / 100.0;
+
+  - platform: ac_dimmer
+    id: dmuchawa
+    gate_pin: 17
+    zero_cross_pin:
+      number: 21
+      mode:
+        input: true
+        pullup: true
+    min_power: 0.3
+    zero_means_zero: True
+
+  - platform: gpio
+    id: dmuchawa_switch
+    pin: 5
+
+  - platform: gpio
+    id: "piec_gazowy"
+    pin:
+      number: 16
+      inverted: True
+
+  - platform: gpio
+    id: "dmuchawa_indicator"
+    inverted: True
+    pin: 18
+
+number:
+  - platform: template
+    max_value: 100
+    min_value: 30
+    unit_of_measurement: "%"
+    step: 10
+    name: "Maks. predkosc dmuchawy"
+    id: "dmuchawa_max_speed"
+    restore_value: True
+    optimistic: True
+    set_action:
+      then:
+        - output.set_level:
+            id: dmuchawa_intermediate
+            level: !lambda |-
+              id(dmuchawa_max_speed).publish_state(x);
+              return dmuchawa_pid_output->value();
+
+dallas:
+  - pin: 4
+    update_interval: 10s
+
+sensor:
+  - platform: dallas
+    name: "termometr pokojowy"
+    id: "pokojowy"
+    address: 0x1c062261923ed728
+  - platform: dallas
+    name: "temperatura piec"
+    id: "piec_temperatura"
+    address: 0x78041783c0c3ff28
+  - platform: template
+    id: dmuchawa_current_output
+    name: "Prędkość dmuchawy"
+    unit_of_measurement: "%"
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 19
+      inverted: True
+      mode:
+        input: True
+        pullup: True
+    id: dmuchawa_toggle
+    on_click:
+      then:
+        - climate.control:
+            mode: !lambda if(id(dmuchawa_pid).mode == CLIMATE_MODE_OFF) { return CLIMATE_MODE_HEAT; } else { return CLIMATE_MODE_OFF; }
+            id: dmuchawa_pid

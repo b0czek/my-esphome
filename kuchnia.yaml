@@ -1,0 +1,114 @@
+esphome:
+  name: "kuchnia"
+  libraries:
+    - lvgl/lvgl
+    - SPI
+    - bodmer/tft_espi
+  includes:
+    - lv_conf.h
+    - DisplayComponent.h
+    - ClimateDisplay.h
+    - TemperatureChart.h
+  platformio_options:
+    build_flags:
+      - "-D LV_CONF_INCLUDE_SIMPLE"
+      - "-D LV_LVGL_H_INCLUDE_SIMPLE"
+      - "-D LV_CONF_PATH=/config/esphome/lv_conf.h"
+
+      - "-D USER_SETUP_LOADED=1"
+      - "-D ILI9341_DRIVER=1"
+      - "-D LV_HOR_RES_MAX=240"
+      - "-D LV_VER_RES_MAX=320"
+      - "-D LV_FONT_MONTSERRAT_32"
+      - "-D TFT_ROTATION=2 ; Use default, see TFT_ROTATION values"
+      - "-D TFT_MISO=19"
+      - "-D TFT_MOSI=23"
+      - "-D TFT_SCLK=18"
+      - "-D TFT_CS=22"
+      - "-D TFT_DC=21"
+      - "-D TFT_RST=17"
+      - "-D SPI_FREQUENCY=40000000"
+
+esp32:
+  board: esp32dev
+
+# Enable logging
+logger:
+#  level: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret kuchnia_api_key
+
+ota:
+  password: !secret kuchnia_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    gateway: 192.168.1.1
+    static_ip: 192.168.1.49
+    subnet: 255.255.255.0
+    dns1: 8.8.8.8
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Esphome-Web-7B7E2C"
+    password: "ZSSZsFnNjUvm"
+
+http_request:
+  timeout: 20s
+
+time:
+  - platform: homeassistant
+    timezone: Europe/Warsaw
+    id: time_sync
+
+substitutions:
+  auth_token: !secret kuchnia_auth_token
+  callback_ip: !secret kuchnia_callback_ip
+  callback_port: !secret kuchnia_callback_port
+
+custom_component:
+  - lambda: |-
+      auto display = new DisplayComponent();
+      return {display};
+
+  - lambda: |-
+      auto climate = new ClimateDisplay("climate.sterowanie_dmuchawa", "sensor.predkosc_dmuchawy");
+      return {climate};
+    id: climate_display
+
+  - lambda: |-
+      auto temperature_chart = new TemperatureChart(2, "sensor.temperatura_piec", "${auth_token}", "${callback_ip}", "${callback_port}");
+      return {temperature_chart};
+
+sensor:
+  - platform: rotary_encoder
+    pin_a: 26
+    pin_b: 27
+    id: enc
+    on_clockwise:
+      then:
+        - lambda: |-
+            ((ClimateDisplay*)id(climate_display).get_component(0))->modify_target_temp(1);
+    internal: True
+    on_anticlockwise:
+      then:
+        - lambda: |-
+            ((ClimateDisplay*)id(climate_display).get_component(0))->modify_target_temp(-1);
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: 25
+      inverted: True
+    id: button
+
+    filters:
+      - delayed_on: 10ms
+    on_click:
+      then:
+        - lambda: |-
+            ((ClimateDisplay*)id(climate_display).get_component(0))->toggle_state();

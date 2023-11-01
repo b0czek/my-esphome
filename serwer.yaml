@@ -1,0 +1,124 @@
+esphome:
+  name: serwer
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret serwer_api_key
+
+ota:
+  password: !secret serwer_ota_password
+
+#wifi:
+#ssid: !secret wifi_ssid
+#password: !secret wifi_password
+#manual_ip:
+#  gateway: 192.168.1.1
+#  static_ip: 192.168.1.17
+#  subnet: 255.255.255.0
+#  dns1: 8.8.8.8
+ethernet:
+  type: LAN8720
+  mdc_pin: 33
+  mdio_pin: 32
+  phy_addr: 1
+  power_pin: 17
+  clk_mode: GPIO0_IN
+  manual_ip:
+    gateway: 192.168.1.1
+    static_ip: 192.168.1.17
+    subnet: 255.255.255.0
+    dns1: 8.8.8.8
+
+i2c:
+  - sda: 16
+    scl: 4
+
+sensor:
+  - platform: bme280
+    address: 0x76
+    id: bme280_serwer
+
+    temperature:
+      name: "Temperatura serwer"
+      id: serwer_temperature
+
+    humidity:
+      name: "Wilgotnosc serwer"
+      id: serwer_humidity
+
+  - platform: adc
+    pin: 34
+    name: "is1"
+    id: "is1"
+    update_interval: 100ms
+    filters:
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 5
+      - multiply: 10
+    unit_of_measurement: A
+
+  - platform: adc
+    pin: 35
+    name: "is2"
+    id: "is2"
+    update_interval: 100ms
+
+    filters:
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 5
+      - multiply: 10
+
+    unit_of_measurement: A
+
+switch:
+  - platform: gpio
+    id: en
+    pin: 15
+  - platform: gpio
+    id: open_pin
+    pin: 5
+  - platform: gpio
+    id: close_pin
+    pin: 18
+
+cover:
+  - platform: current_based
+    name: "Strych"
+
+    open_sensor: is2
+    open_moving_current_threshold: 1.2
+    open_obstacle_current_threshold: 2.9
+    open_duration: 30s
+    open_action:
+      then:
+        - switch.turn_on: en
+        - delay: 1000ms
+        - switch.turn_on: open_pin
+
+    close_sensor: is1
+    close_moving_current_threshold: 1.9
+    # close_obstacle_current_threshold: 2.5
+    close_duration: 30s
+    close_action:
+      then:
+        - switch.turn_on: en
+        - delay: 1000ms
+        - switch.turn_on: close_pin
+    stop_action:
+      then:
+        - switch.turn_off: en
+        - switch.turn_off: open_pin
+        - switch.turn_off: close_pin
+    start_sensing_delay: 1500ms
+    malfunction_detection: False
